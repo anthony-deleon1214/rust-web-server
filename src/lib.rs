@@ -1,4 +1,4 @@
-use std::{fmt, thread};
+use std::{fmt, thread, sync::mpsc};
 
 #[derive(Debug)]
 pub struct PoolCreationError;
@@ -15,9 +15,9 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(id: usize) -> Worker {
+    fn new(id: usize, receiver: mpsc::Receiver<Job>) -> Worker {
         let builder = thread::Builder::new();
-        let thread = match builder.spawn(|| {}) {
+        let thread = match builder.spawn(|| { receiver }) {
             Err(e) => {
                 eprintln!("failed to create thread");
                 Err(e)
@@ -30,8 +30,11 @@ impl Worker {
     }
 }
 
+struct Job;
+
 pub struct ThreadPool {
     workers: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
 }
 
 impl ThreadPool {
@@ -45,12 +48,14 @@ impl ThreadPool {
     pub fn build(size: usize) -> Result<ThreadPool, PoolCreationError> {
         let mut workers = Vec::with_capacity(size);
 
+        let (sender, receiver) = mpsc::channel();
+
         for id in 0..size {
-            workers.push(Worker::new(id));
+            workers.push(Worker::new(id, receiver));
         }
         match size {
             0 => Err(PoolCreationError),
-            _ => Ok(ThreadPool { workers }),
+            _ => Ok(ThreadPool { workers, sender }),
         }
     }
 
