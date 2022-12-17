@@ -22,14 +22,23 @@ impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         let builder = thread::Builder::new();
         let thread = match builder.spawn(move || loop {
-                let job = receiver.lock().expect("Unable to acquire mutex lock").recv().unwrap();
+                let message = receiver.lock().expect("Unable to acquire mutex lock").recv();
 
-                println!("Worker {id} got a job; executing.");
+                match message {
+                    Ok(job) => {
+                        println!("Worker {id} got a job; executing.");
 
-                job();
+                        job();
+                    }
+                    Err(_) => {
+                        println!("Worker {id} disconnected; shutting down.");
+                        break;
+                    }
+                }
+                
         }) {
             Err(e) => {
-                eprintln!("failed to create thread");
+                eprintln!("Failed to create new thread.");
                 Err(e)
             },
             Ok(thread) => Ok(thread),
@@ -45,7 +54,7 @@ type Job = Box<dyn FnOnce() + Send + 'static>;
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
-    sender: mpsc::Sender<Job>,
+    sender: Option<mpsc::Sender<Job>>,
 }
 
 impl ThreadPool {
@@ -68,7 +77,7 @@ impl ThreadPool {
         }
         match size {
             0 => Err(PoolCreationError),
-            _ => Ok(ThreadPool { workers, sender }),
+            _ => Ok(ThreadPool { workers, sender: Some(sender) }),
         }
     }
 
@@ -78,7 +87,7 @@ impl ThreadPool {
     {
         let job = Box::new(f);
 
-        self.sender.send(job).unwrap();
+        self.sender.as_ref().unwrap().send(job).unwrap();
     }
 }
 
