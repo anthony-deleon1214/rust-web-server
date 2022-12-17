@@ -1,4 +1,8 @@
-use std::{fmt, thread, sync::mpsc};
+use std::{
+    fmt,
+    thread,
+    sync::{mpsc, Arc, Mutex},
+};
 
 #[derive(Debug)]
 pub struct PoolCreationError;
@@ -11,13 +15,19 @@ impl fmt::Display for PoolCreationError {
 
 struct Worker {
     id: usize,
-    thread: thread::JoinHandle<()>,
+    thread: Option<thread::JoinHandle<Arc<Mutex<mpsc::Receiver<Job>>>>>,
 }
 
 impl Worker {
-    fn new(id: usize, receiver: mpsc::Receiver<Job>) -> Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         let builder = thread::Builder::new();
-        let thread = match builder.spawn(|| { receiver }) {
+        let thread = match builder.spawn(move || loop {
+                let job = receiver.lock().expect("Unable to acquire mutex lock").recv().unwrap();
+
+                println!("Worker {id} got a job; executing.");
+
+                job();
+        }) {
             Err(e) => {
                 eprintln!("failed to create thread");
                 Err(e)
@@ -26,11 +36,12 @@ impl Worker {
         };
         // Still need to work out how the thread builder works
         let thread = thread.unwrap();
-        Worker{ id, thread }
+        Worker{ id, thread: Some(thread) }
     }
 }
 
-struct Job;
+// Job defined as a type alias for a closure
+type Job = Box<dyn FnOnce() + Send + 'static>;
 
 pub struct ThreadPool {
     workers: Vec<Worker>,
@@ -50,8 +61,10 @@ impl ThreadPool {
 
         let (sender, receiver) = mpsc::channel();
 
+        let receiver = Arc::new(Mutex::new(receiver));
+
         for id in 0..size {
-            workers.push(Worker::new(id, receiver));
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
         match size {
             0 => Err(PoolCreationError),
@@ -63,6 +76,21 @@ impl ThreadPool {
     where
         F: FnOnce() + Send + 'static,
     {
+        let job = Box::new(f);
+
+        self.sender.send(job).unwrap();
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+
+           if let Some(thread) = worker.thread.take() {
+               thread.join().unwrap();
+           }
+        }
     }
 }
 
