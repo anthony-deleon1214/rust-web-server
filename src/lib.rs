@@ -15,7 +15,7 @@ impl fmt::Display for PoolCreationError {
 
 struct Worker {
     id: usize,
-    thread: Option<thread::JoinHandle<Arc<Mutex<mpsc::Receiver<Job>>>>>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Worker {
@@ -93,6 +93,8 @@ impl ThreadPool {
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
+        drop(self.sender.take());
+
         for worker in &mut self.workers {
             println!("Shutting down worker {}", worker.id);
 
